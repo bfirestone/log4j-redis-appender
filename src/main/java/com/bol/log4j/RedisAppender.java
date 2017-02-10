@@ -1,19 +1,18 @@
 /**
-* Based on code by Pavlo Baron, Landro Silva & Ryan Tenney
-*
-* Licensed under the Apache License, Version 2.0 (the "License");
-* you may not use this file except in compliance with the License.
-* You may obtain a copy of the License at
-*
-* http://www.apache.org/licenses/LICENSE-2.0
-*
-* Unless required by applicable law or agreed to in writing, software
-* distributed under the License is distributed on an "AS IS" BASIS,
-* WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-* See the License for the specific language governing permissions and
-* limitations under the License.
-*
-**/
+ * Based on code by Pavlo Baron, Landro Silva & Ryan Tenney
+ * <p>
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ * <p>
+ * http://www.apache.org/licenses/LICENSE-2.0
+ * <p>
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ **/
 
 package com.bol.log4j;
 
@@ -31,6 +30,8 @@ import org.apache.log4j.spi.ErrorCode;
 import org.apache.log4j.spi.LoggingEvent;
 
 import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
+import redis.clients.jedis.JedisPoolConfig;
 import redis.clients.jedis.exceptions.JedisException;
 import redis.clients.jedis.exceptions.JedisDataException;
 import redis.clients.util.SafeEncoder;
@@ -38,7 +39,6 @@ import redis.clients.util.SafeEncoder;
 import java.lang.management.ManagementFactory;
 import javax.management.MBeanServer;
 import javax.management.ObjectName;
-
 
 
 public class RedisAppender extends AppenderSkeleton implements Runnable, RedisAppenderMBean {
@@ -61,6 +61,7 @@ public class RedisAppender extends AppenderSkeleton implements Runnable, RedisAp
     private int messageIndex = 0;
     private byte[][] batch;
     private Jedis jedis;
+    private JedisPool jedisPool;
     private ScheduledExecutorService executor;
     private ScheduledFuture<?> task;
 
@@ -74,18 +75,21 @@ public class RedisAppender extends AppenderSkeleton implements Runnable, RedisAp
     private int eventsPushed = 0;
 
 
-
     @Override
     public void activateOptions() {
         try {
             super.activateOptions();
 
             if (key == null) throw new IllegalStateException("Must set 'key'");
-            if (!(flushInterval > 0)) throw new IllegalStateException("FlushInterval (ex. Period) must be > 0. Configured value: " + flushInterval);
-            if (!(queueSize > 0)) throw new IllegalStateException("QueueSize must be > 0. Configured value: " + queueSize);
-            if (!(batchSize > 0)) throw new IllegalStateException("BatchSize must be > 0. Configured value: " + batchSize);
+            if (!(flushInterval > 0))
+                throw new IllegalStateException("FlushInterval (ex. Period) must be > 0. Configured value: " + flushInterval);
+            if (!(queueSize > 0))
+                throw new IllegalStateException("QueueSize must be > 0. Configured value: " + queueSize);
+            if (!(batchSize > 0))
+                throw new IllegalStateException("BatchSize must be > 0. Configured value: " + batchSize);
 
-            if (executor == null) executor = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory(this.getClass().getSimpleName(), true));
+            if (executor == null)
+                executor = Executors.newSingleThreadScheduledExecutor(new NamedThreadFactory(this.getClass().getSimpleName(), true));
 
             if (task != null && !task.isDone()) task.cancel(true);
 
@@ -115,7 +119,7 @@ public class RedisAppender extends AppenderSkeleton implements Runnable, RedisAp
     @Override
     protected void append(LoggingEvent event) {
         try {
-            eventCounter++ ;
+            eventCounter++;
             int size = events.size();
             if (size < queueSize) {
                 populateEvent(event);
@@ -239,14 +243,20 @@ public class RedisAppender extends AppenderSkeleton implements Runnable, RedisAp
         }
     }
 
-    protected boolean push() {
+    private boolean push() {
         LogLog.debug("Sending " + messageIndex + " log messages to Redis at " + getRedisAddress());
-        try {
 
-            jedis.rpush(SafeEncoder.encode(key),
-                batchSize == messageIndex
-                    ? batch
-                    : Arrays.copyOf(batch, messageIndex));
+        System.out.println("s: " + jedis.ping());
+        try {
+            if (batchSize == messageIndex) {
+                for (byte[] bytes : batch) {
+                    jedis.publish(key, SafeEncoder.encode(bytes).trim());
+
+                }
+            } else {
+                System.out.println("adding to array");
+                Arrays.copyOf(batch, messageIndex);
+            }
 
             eventsPushed += messageIndex;
             messageIndex = 0;
@@ -321,14 +331,37 @@ public class RedisAppender extends AppenderSkeleton implements Runnable, RedisAp
         return true;
     }
 
-    public int getEventCounter() { return eventCounter; }
-    public int getEventsDroppedInQueueing() { return eventsDroppedInQueueing; }
-    public int getEventsDroppedInPush() { return eventsDroppedInPush; }
-    public int getConnectCounter() { return connectCounter; }
-    public int getConnectFailures() { return connectFailures; }
-    public int getBatchPurges() { return batchPurges; }
-    public int getEventsPushed() { return eventsPushed; }
-    public int getEventQueueSize() { return events.size(); }
+    public int getEventCounter() {
+        return eventCounter;
+    }
+
+    public int getEventsDroppedInQueueing() {
+        return eventsDroppedInQueueing;
+    }
+
+    public int getEventsDroppedInPush() {
+        return eventsDroppedInPush;
+    }
+
+    public int getConnectCounter() {
+        return connectCounter;
+    }
+
+    public int getConnectFailures() {
+        return connectFailures;
+    }
+
+    public int getBatchPurges() {
+        return batchPurges;
+    }
+
+    public int getEventsPushed() {
+        return eventsPushed;
+    }
+
+    public int getEventQueueSize() {
+        return events.size();
+    }
 
     private void registerMBean() {
         Class me = this.getClass();
